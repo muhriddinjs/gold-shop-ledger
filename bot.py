@@ -20,21 +20,11 @@ load_dotenv()
 BOT_TOKEN: Final[str | None] = os.getenv("BOT_TOKEN")
 GOOGLE_SHEETS_ID: Final[str | None] = os.getenv("GOOGLE_SHEETS_ID")
 GOOGLE_SERVICE_ACCOUNT_FILE: Final[str | None] = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-GOOGLE_WORKSHEET_NAME: Final[str] = os.getenv("GOOGLE_WORKSHEET_NAME", "transactions")
 
-# Barcha bosqichlar (States) ro'yxati
+# Barcha bosqichlar
 (
-    MAIN_MENU,
-    SOTISH_KATEGORIYA,
-    BUYUM_TURI,
-    GRAMM,
-    NARX,
-    KURS,
-    SOTIB_OLISH_KIMDAN,
-    MIJOZDAN_TURI,
-    XARAJAT_TOIFA,
-    XARAJAT_IZOH,
-    XARAJAT_NARX
+    MAIN_MENU, SOTISH_KATEGORIYA, BUYUM_TURI, GRAMM, NARX, KURS,
+    SOTIB_OLISH_KIMDAN, MIJOZDAN_TURI, XARAJAT_TOIFA, XARAJAT_IZOH, XARAJAT_NARX
 ) = range(11)
 
 # Tugmalar
@@ -46,42 +36,74 @@ MIJOZDAN_BUTTONS = [["Buyumlar", "Lom"]]
 XARAJAT_TOIFALARI = [["Ijara", "Oylik", "Soliq"], ["Elektr", "Kanselyariya", "Boshqa xarajat"]]
 
 
-def get_worksheet():
+# --- GOOGLE SHEETS ULANISH VA DINAMIK LIST YARATISH ---
+def get_worksheet(sheet_name: str):
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_file(GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(GOOGLE_SHEETS_ID)
+    
     try:
-        ws = sh.worksheet(GOOGLE_WORKSHEET_NAME)
+        ws = sh.worksheet(sheet_name)
     except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=GOOGLE_WORKSHEET_NAME, rows=1000, cols=10)
-        ws.append_row(["Sana", "Bo'lim", "Kategoriya", "Nomi/Izoh", "Gramm", "Narx", "Kurs", "Foydalanuvchi", "Oy", "Yil"])
+        # Agar list yo'q bo'lsa, uni yaratib, mos sarlavhalarni qo'shamiz
+        ws = sh.add_worksheet(title=sheet_name, rows=1000, cols=10)
+        
+        if sheet_name == "Sotish":
+            headers = ["Sana", "Kategoriya", "Nomi/Izoh", "Gramm", "Narx", "Kurs", "Foydalanuvchi", "Oy", "Yil"]
+        elif sheet_name == "Sotib olish":
+            headers = ["Sana", "Kimdan", "Kategoriya", "Nomi/Izoh", "Gramm", "Narx", "Kurs", "Foydalanuvchi", "Oy", "Yil"]
+        elif sheet_name == "Xarajatlar":
+            headers = ["Sana", "Toifa", "Izoh", "Summa", "Foydalanuvchi", "Oy", "Yil"]
+        else:
+            headers = ["Sana", "Ma'lumot"]
+            
+        ws.append_row(headers)
     return ws
 
 
-# --- GOOGLE SHEETS GA SAQLASH (Umumiy funksiya) ---
+# --- MA'LUMOTLARNI SAQLASH (Dinamik qatorlar) ---
 async def save_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     now = datetime.now()
     user = update.effective_user
+    bolim = context.user_data.get("bolim", "Boshqa")
     
-    row = [
-        now.strftime("%Y-%m-%d %H:%M:%S"),
-        context.user_data.get("bolim", ""),
-        context.user_data.get("kategoriya", ""),
-        context.user_data.get("nomi", ""),
-        context.user_data.get("gramm", ""),
-        context.user_data.get("narx", ""),
-        context.user_data.get("kurs", ""),
-        user.full_name if user else "Noma'lum",
-        now.strftime("%m"),
-        now.strftime("%Y"),
-    ]
+    date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    common_tail = [user.full_name if user else "Noma'lum", now.strftime("%m"), now.strftime("%Y")]
+
+    # Qaysi bo'limdaligiga qarab, qatorni turlicha yig'amiz
+    if bolim == "Sotish":
+        row = [
+            date_str,
+            context.user_data.get("kategoriya", ""),
+            context.user_data.get("nomi", ""),
+            context.user_data.get("gramm", ""),
+            context.user_data.get("narx", ""),
+            context.user_data.get("kurs", "")
+        ] + common_tail
+    elif bolim == "Sotib olish":
+        row = [
+            date_str,
+            context.user_data.get("kimdan", ""),
+            context.user_data.get("kategoriya", ""),
+            context.user_data.get("nomi", ""),
+            context.user_data.get("gramm", ""),
+            context.user_data.get("narx", ""),
+            context.user_data.get("kurs", "")
+        ] + common_tail
+    elif bolim == "Xarajatlar":
+        row = [
+            date_str,
+            context.user_data.get("kategoriya", ""), # Toifa
+            context.user_data.get("nomi", ""),       # Izoh
+            context.user_data.get("narx", "")        # Summa
+        ] + common_tail
 
     try:
-        ws = get_worksheet()
+        ws = get_worksheet(bolim) # Bo'lim nomidagi listga ulanadi
         ws.append_row(row, value_input_option="USER_ENTERED")
         await update.message.reply_text(
-            f"✅ {context.user_data.get('bolim')} muvaffaqiyatli saqlandi!\nYangi amaliyot uchun /start bosing.",
+            f"✅ Ma'lumot '{bolim}' ro'yxatiga saqlandi!\nYangi amaliyot uchun /start bosing.",
             reply_markup=ReplyKeyboardRemove()
         )
     except Exception as exc:
@@ -105,43 +127,35 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         markup = ReplyKeyboardMarkup(SOTISH_BUTTONS, resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text("Sotish bo'limi. Kategoriya tanlang:", reply_markup=markup)
         return SOTISH_KATEGORIYA
-        
     elif tanlov == "Sotib olish":
         markup = ReplyKeyboardMarkup(SOTIB_OLISH_BUTTONS, resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text("Kimdan sotib olyapsiz?", reply_markup=markup)
         return SOTIB_OLISH_KIMDAN
-        
     elif tanlov == "Xarajatlar":
         markup = ReplyKeyboardMarkup(XARAJAT_TOIFALARI, resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text("Xarajat toifasini tanlang (yoki o'zingiz yozing):", reply_markup=markup)
         return XARAJAT_TOIFA
-    else:
-        await update.message.reply_text("Noto'g'ri tanlov. Tugmalardan foydalaning.")
-        return MAIN_MENU
+    return MAIN_MENU
 
-
-# --- 1. SOTISH BO'LIMI HANDLERLARI ---
+# --- 1. SOTISH BO'LIMI ---
 async def sotish_kategoriya_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    kategoriya = update.message.text
-    context.user_data["kategoriya"] = kategoriya
-
-    if kategoriya == "Buyumlar":
+    context.user_data["kategoriya"] = update.message.text
+    if update.message.text == "Buyumlar":
         markup = ReplyKeyboardMarkup(BUYUM_BUTTONS, resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text("Qanday buyum sotilyapti?", reply_markup=markup)
         return BUYUM_TURI
-    elif kategoriya == "Lom":
+    elif update.message.text == "Lom":
         context.user_data["nomi"] = "Lom"
-        await update.message.reply_text("Lomning og'irligini kiriting (grammda, masalan: 12.5):", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("Lomning og'irligini kiriting (gramm):", reply_markup=ReplyKeyboardRemove())
         return GRAMM
     return SOTISH_KATEGORIYA
 
-
-# --- 2. SOTIB OLISH BO'LIMI HANDLERLARI ---
+# --- 2. SOTIB OLISH BO'LIMI ---
 async def sotib_olish_kimdan_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tanlov = update.message.text
-    context.user_data["kategoriya"] = tanlov
-
+    context.user_data["kimdan"] = tanlov
     if tanlov == "Zavoddan (lom)":
+        context.user_data["kategoriya"] = "Lom"
         context.user_data["nomi"] = "Lom"
         await update.message.reply_text("Lomning og'irligini kiriting (gramm):", reply_markup=ReplyKeyboardRemove())
         return GRAMM
@@ -153,6 +167,7 @@ async def sotib_olish_kimdan_handler(update: Update, context: ContextTypes.DEFAU
 
 async def mijozdan_turi_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tanlov = update.message.text
+    context.user_data["kategoriya"] = tanlov
     if tanlov == "Buyumlar":
         markup = ReplyKeyboardMarkup(BUYUM_BUTTONS, resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text("Qanday buyum?", reply_markup=markup)
@@ -163,32 +178,26 @@ async def mijozdan_turi_handler(update: Update, context: ContextTypes.DEFAULT_TY
         return GRAMM
     return MIJOZDAN_TURI
 
-
-# --- 3. XARAJATLAR BO'LIMI HANDLERLARI ---
+# --- 3. XARAJATLAR BO'LIMI ---
 async def xarajat_toifa_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["kategoriya"] = update.message.text
+    context.user_data["kategoriya"] = update.message.text # Toifa sifatida saqlaymiz
     await update.message.reply_text("Xarajat uchun izoh kiriting (masalan: May oyi ijara uchun):", reply_markup=ReplyKeyboardRemove())
     return XARAJAT_IZOH
 
 async def xarajat_izoh_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["nomi"] = update.message.text # Xarajatda izoh 'nomi' ustuniga tushadi
+    context.user_data["nomi"] = update.message.text # Izoh sifatida saqlaymiz
     await update.message.reply_text("Xarajat summasini kiriting (masalan: 1500000):")
     return XARAJAT_NARX
 
 async def xarajat_narx_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        narx = float(update.message.text.replace(" ", "").replace(",", "."))
-        context.user_data["narx"] = narx
-        context.user_data["gramm"] = "-"
-        context.user_data["kurs"] = "-"
-        # Xarajat uchun gramm va kurs kerak emas, to'g'ridan-to'g'ri saqlaymiz
+        context.user_data["narx"] = float(update.message.text.replace(" ", "").replace(",", "."))
         return await save_data(update, context)
     except ValueError:
         await update.message.reply_text("Iltimos, summani faqat sonlarda kiriting:")
         return XARAJAT_NARX
 
-
-# --- UMUMIY (GRAMM, NARX, KURS) HANDLERLAR ---
+# --- UMUMIY (GRAMM, NARX, KURS) ---
 async def buyum_turi_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["nomi"] = update.message.text
     await update.message.reply_text("Og'irligini kiriting (grammda, masalan: 5.4):", reply_markup=ReplyKeyboardRemove())
@@ -196,18 +205,16 @@ async def buyum_turi_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def gramm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        gramm = float(update.message.text.replace(",", "."))
-        context.user_data["gramm"] = gramm
+        context.user_data["gramm"] = float(update.message.text.replace(",", "."))
         await update.message.reply_text("Narxini kiriting (masalan: 3500000):")
         return NARX
     except ValueError:
-        await update.message.reply_text("Iltimos, grammni faqat sonlarda kiriting (masalan: 12.5):")
+        await update.message.reply_text("Iltimos, grammni faqat sonlarda kiriting:")
         return GRAMM
 
 async def narx_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        narx = float(update.message.text.replace(" ", "").replace(",", "."))
-        context.user_data["narx"] = narx
+        context.user_data["narx"] = float(update.message.text.replace(" ", "").replace(",", "."))
         await update.message.reply_text("Kursni kiriting (masalan: 12600):")
         return KURS
     except ValueError:
@@ -216,19 +223,15 @@ async def narx_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def kurs_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        kurs = float(update.message.text.replace(" ", "").replace(",", "."))
-        context.user_data["kurs"] = kurs
-        # Kurs kiritilgach, ma'lumotlarni saqlaymiz
+        context.user_data["kurs"] = float(update.message.text.replace(" ", "").replace(",", "."))
         return await save_data(update, context)
     except ValueError:
         await update.message.reply_text("Iltimos, kursni faqat sonlarda kiriting:")
         return KURS
 
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Amaliyot bekor qilindi. Boshlash uchun /start bosing.", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("Amaliyot bekor qilindi. /start bosing.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
-
 
 # --- MAIN FUNKSIYASI ---
 async def main() -> None:
@@ -257,7 +260,7 @@ async def main() -> None:
     async with app:
         await app.initialize()
         await app.start()
-        print("Bot to'liq sxema bo'yicha ishga tushdi...")
+        print("Bot 3 ta alohida list uchun ishga tushdi...")
         await app.updater.start_polling()
         
         import asyncio
