@@ -20,7 +20,7 @@ load_dotenv()
 BOT_TOKEN: Final[str | None] = os.getenv("BOT_TOKEN")
 GOOGLE_SHEETS_ID: Final[str | None] = os.getenv("GOOGLE_SHEETS_ID")
 GOOGLE_SERVICE_ACCOUNT_FILE: Final[str | None] = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-
+ALLOWED_USERS = os.getenv("ALLOWED_USERS", "").split(",")
 # Barcha bosqichlar
 (
     MAIN_MENU, SOTISH_KATEGORIYA, BUYUM_TURI, GRAMM, NARX, KURS,
@@ -114,6 +114,14 @@ async def save_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 # --- BOSH MENYU ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = str(update.effective_user.id)
+    
+    # QOROVUL QISMI: Agar foydalanuvchi ID si ro'yxatda bo'lmasa, haydab yuboramiz
+    if user_id not in ALLOWED_USERS:
+        await update.message.reply_text("🚫 Kechirasiz, siz tizimga kirish huquqiga ega emassiz.")
+        return ConversationHandler.END
+
+    # Agar o'zimiznikilar bo'lsa, odatdagidek ishlayveradi
     context.user_data.clear()
     markup = ReplyKeyboardMarkup(MAIN_BUTTONS, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Assalomu alaykum! Asosiy menyu. Qaysi bo'limga kiramiz?", reply_markup=markup)
